@@ -66,8 +66,17 @@ class TaskKeeperSpec extends FeatureSpec with Matchers with GivenWhenThen with E
 
       When("it's already the scheduled time")
       Time.withTimeAt(thisEvening) { t =>
+        Then("the schedule can be fetched")
         val schedule = Await.result(tk.fetch[Texting](category, 1)).head
         schedule.task shouldBe task
+
+        When("the schedule is assigned")
+        val assignment = Await.result(tk.assign(schedule)).get
+        assignment.scheduleId shouldBe schedule.id
+        assignment.createdAt shouldBe Time.now
+
+        Then("it should not be assigned again")
+        Await.result(tk.assign(schedule)) shouldBe None
       }
     }
   }

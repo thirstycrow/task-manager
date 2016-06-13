@@ -94,5 +94,38 @@ package object taskkeeper {
       status: ScheduleStatus = Assignable,
       createdAt: Time = Time.now,
       updatedAt: Time = Time.now) {
+
+    def assign() = {
+      val now = Time.now
+      new Assignment(
+        id = ObjectId.get,
+        scheduleId = id,
+        createdAt = now)
+    }
+  }
+
+  object Assignment {
+
+    def apply(doc: Document): Assignment = {
+      new Assignment(
+        id = doc("_id").asObjectId().getValue,
+        scheduleId = doc("schedule_id").asObjectId().getValue,
+        createdAt = doc.get("created_at").asTime.get)
+    }
+
+    implicit def fromBson(doc: BsonDocument): Assignment = apply(Document(doc))
+
+    implicit def toBson(a: Assignment) = a.toBson
+  }
+
+  case class Assignment(
+      id: ObjectId,
+      scheduleId: ObjectId,
+      createdAt: Time) {
+
+    def toBson = BsonDocument(
+      "_id" -> id,
+      "schedule_id" -> scheduleId,
+      "created_at" -> createdAt.toDate)
   }
 }

@@ -5,9 +5,13 @@ import org.mongodb.scala.MongoDatabase
 import org.mongodb.scala.bson.BsonValue
 import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.model.Filters._
+import org.mongodb.scala.model.FindOneAndUpdateOptions
+import org.mongodb.scala.model.ReturnDocument
+import org.mongodb.scala.model.Updates._
 
 import com.twitter.util.Future
 import com.twitter.util.Time
+import com.twitter.util.Duration
 
 trait TaskKeeperCollections {
 
@@ -45,6 +49,22 @@ trait TaskKeeperOperations {
       .limit(count)
       .toTwitterFuture()
       .map(_.map(doc => Schedule(doc)(ev)))
+  }
+
+  def assign(schedule: Schedule[_]): Future[Option[Assignment]] = {
+    val now = Time.now
+    schedules.findOneAndUpdate(
+      filter = and(
+        equal("_id", schedule.id),
+        equal("status", Assignable.value)),
+      update = combine(
+        set("status", Assigned.value),
+        set("assignment", schedule.assign().toBson)),
+      options = FindOneAndUpdateOptions()
+        .returnDocument(ReturnDocument.AFTER))
+      .map(_("assignment").asDocument(): Assignment)
+      .toTwitterFuture()
+      .map(_.headOption)
   }
 }
 

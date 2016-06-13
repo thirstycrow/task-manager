@@ -48,13 +48,26 @@ class TaskKeeperSpec extends FeatureSpec with Matchers with GivenWhenThen with E
   def thisEvening = zeroOclock + 18.hour
 
   feature("schedule a task") {
-
     val category = "tk.schedule"
 
     scenario("schedule a one-time task") {
+
+      Given("a task scheduled at a future time")
       val task = Task(category, Texting("10011110000", "Do some shopping tonight"))
       Time.withTimeAt(zeroOclock) { t =>
         Await.result(tk.schedule(task, thisEvening))
+      }
+
+      When("it's not the scheduled time yet")
+      Time.withTimeAt(thisMorning) { t =>
+        Then("the schedule should NOT be fetched")
+        Await.result(tk.fetch(category, 1)) shouldBe Nil
+      }
+
+      When("it's already the scheduled time")
+      Time.withTimeAt(thisEvening) { t =>
+        val schedule = Await.result(tk.fetch[Texting](category, 1)).head
+        schedule.task shouldBe task
       }
     }
   }

@@ -11,6 +11,7 @@ import org.mongodb.scala.model.Updates._
 
 import com.twitter.util.Future
 import com.twitter.util.Time
+import com.twitter.util.Timer
 import com.twitter.util.Duration
 
 trait TaskKeeperCollections {
@@ -23,6 +24,8 @@ trait TaskKeeperCollections {
 trait TaskKeeperOperations {
 
   self: TaskKeeperCollections =>
+
+  val timer: Timer
 
   def schedule[T](
     task: Task[T],
@@ -51,23 +54,48 @@ trait TaskKeeperOperations {
       .map(_.map(doc => Schedule(doc)(ev)))
   }
 
-  def assign(schedule: Schedule[_]): Future[Option[Assignment]] = {
+  def assign(schedule: Schedule[_], timeout: Option[Duration] = None): Future[Option[Assignment]] = {
     val now = Time.now
+    val _timeout = timeout.getOrElse(schedule.timeout)
     schedules.findOneAndUpdate(
       filter = and(
         equal("_id", schedule.id),
         equal("status", Assignable.value)),
       update = combine(
         set("status", Assigned.value),
-        set("assignment", schedule.assign().toBson)),
+        set("assignment", schedule.assign(_timeout).toBson)),
       options = FindOneAndUpdateOptions()
         .returnDocument(ReturnDocument.AFTER))
+      .map(_("assignment").asDocument(): Assignment)
+      .toTwitterFuture()
+      .map(_.headOption)
+      .onSuccess {
+        case None =>
+        case Some(assignment) =>
+          timer.doLater(_timeout) {
+            this.timeout(schedule, assignment)
+          }
+      }
+  }
+
+  def timeout(schedule: Schedule[_], assignment: Assignment): Future[Option[Assignment]] = {
+    val now = Time.now
+    schedules.findOneAndUpdate(
+      filter = and(
+        equal("_id", schedule.id),
+        equal("assignment._id", assignment.id),
+        equal("status", Assigned.value),
+        lte("assignment.timeout_at", now.toDate)),
+      update = combine(
+        set("status", Assignable.value)),
+      options = FindOneAndUpdateOptions()
+        .returnDocument(ReturnDocument.BEFORE))
       .map(_("assignment").asDocument(): Assignment)
       .toTwitterFuture()
       .map(_.headOption)
   }
 }
 
-class TaskKeeper(val db: MongoDatabase)
+class TaskKeeper(val db: MongoDatabase, val timer: Timer)
   extends TaskKeeperCollections
   with TaskKeeperOperations

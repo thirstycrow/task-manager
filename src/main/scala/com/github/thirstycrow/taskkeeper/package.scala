@@ -16,6 +16,8 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 package object taskkeeper {
 
+  val DefaultTimeout = 1.minute
+
   implicit class BsonHelper(val bson: Option[BsonValue]) extends AnyVal {
 
     def asDuration = bson.filter(_.isInt64())
@@ -73,17 +75,21 @@ package object taskkeeper {
           category = task("category").asString.getValue,
           key = ev(task("key").asDocument)),
         nextTime = doc.get("next_time").asTime.get,
+        timeout = doc.get("timeout_ms").asDuration.getOrElse(DefaultTimeout),
         status = ScheduleStatus(doc("status").asString.getValue),
         createdAt = doc.get("created_at").asTime.get,
-        updatedAt = doc.get("updated_at").asTime orElse doc.get("created_at").asTime get)
+        updatedAt = doc.get("updated_at").asTime orElse doc.get("created_at").asTime get,
+        assignment = doc.get("assignment").map(doc => Assignment.fromBson(doc.asDocument)))
     }
     implicit def toBson[K](s: Schedule[K])(implicit ev: K => BsonValue) = {
       BsonDocument(
         "task" -> Task.toBson(s.task),
         "next_time" -> s.nextTime.toDate,
+        "timeout_ms" -> s.timeout.inMilliseconds,
         "status" -> Assignable.value,
         "created_at" -> s.createdAt.toDate,
-        "udpated_at" -> s.updatedAt.toDate)
+        "udpated_at" -> s.updatedAt.toDate,
+        "assignment" -> s.assignment.map(_.toBson))
     }
   }
 
@@ -91,16 +97,19 @@ package object taskkeeper {
       id: ObjectId,
       task: Task[K],
       nextTime: Time,
+      timeout: Duration = DefaultTimeout,
       status: ScheduleStatus = Assignable,
       createdAt: Time = Time.now,
-      updatedAt: Time = Time.now) {
+      updatedAt: Time = Time.now,
+      assignment: Option[Assignment] = None) {
 
-    def assign() = {
+    def assign(timeout: Duration) = {
       val now = Time.now
       new Assignment(
         id = ObjectId.get,
         scheduleId = id,
-        createdAt = now)
+        createdAt = now,
+        timeoutAt = now + timeout)
     }
   }
 
@@ -110,7 +119,8 @@ package object taskkeeper {
       new Assignment(
         id = doc("_id").asObjectId().getValue,
         scheduleId = doc("schedule_id").asObjectId().getValue,
-        createdAt = doc.get("created_at").asTime.get)
+        createdAt = doc.get("created_at").asTime.get,
+        timeoutAt = doc.get("timeout_at").asTime.get)
     }
 
     implicit def fromBson(doc: BsonDocument): Assignment = apply(Document(doc))
@@ -121,11 +131,13 @@ package object taskkeeper {
   case class Assignment(
       id: ObjectId,
       scheduleId: ObjectId,
-      createdAt: Time) {
+      createdAt: Time,
+      timeoutAt: Time) {
 
     def toBson = BsonDocument(
       "_id" -> id,
       "schedule_id" -> scheduleId,
-      "created_at" -> createdAt.toDate)
+      "created_at" -> createdAt.toDate,
+      "timeout_at" -> timeoutAt.toDate)
   }
 }

@@ -24,7 +24,7 @@ class TaskKeeperSpec extends FeatureSpec with Matchers with GivenWhenThen with E
 
   override def beforeAll() {
     super.beforeAll()
-    tk = new TaskKeeper(mongoClient.getDatabase("tk_test"))
+    tk = new TaskKeeper(mongoClient.getDatabase("tk_test"), new MockTimer)
   }
 
   object Texting {
@@ -75,8 +75,17 @@ class TaskKeeperSpec extends FeatureSpec with Matchers with GivenWhenThen with E
         assignment.scheduleId shouldBe schedule.id
         assignment.createdAt shouldBe Time.now
 
+        Thread.sleep(1000)
         Then("it should not be assigned again")
         Await.result(tk.assign(schedule)) shouldBe None
+
+        When("the assignment timed out")
+        t.advance(DefaultTimeout)
+        Then("the schedule should be reassigned")
+        tk.timer.asInstanceOf[MockTimer].tick()
+        val reassignment = Await.result(tk.assign(schedule)).get
+        reassignment.scheduleId shouldBe schedule.id
+        reassignment.createdAt shouldBe Time.now
       }
     }
   }

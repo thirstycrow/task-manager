@@ -27,6 +27,9 @@ package object taskkeeper {
       .map(d => Time.fromMilliseconds(d.asDateTime.getValue))
 
     def asInt = bson.filter(_.isInt32()).map(_.asInt32.getValue)
+
+    def asDocument = bson.filter(_.isDocument())
+      .map(_.asDocument())
   }
 
   implicit class ObservableHelper[T](val obs: Observable[T]) extends AnyVal {
@@ -54,8 +57,11 @@ package object taskkeeper {
         case Assigned.value => Assigned
         case Accomplished.value => Accomplished
         case Failed.value => Failed
+        case Timeout.value => Timeout
       }
     }
+
+    def all = Seq(Assignable, Assigned, Accomplished, Failed, Timeout)
   }
   sealed abstract class ScheduleStatus(val value: String) {
     def toBson = BsonString(value)
@@ -64,9 +70,15 @@ package object taskkeeper {
   object Assignable extends ScheduleStatus("ASSIGNABLE")
   object Assigned extends ScheduleStatus("ASSIGNED")
   object Accomplished extends ScheduleStatus("ACCOMPLISHED")
+  object Timeout extends ScheduleStatus("TIMEOUT")
   object Failed extends ScheduleStatus("FAILED")
 
   object Schedule {
+
+    def apply[K](doc: BsonDocument)(implicit ev: BsonValue => K): Schedule[K] = {
+      apply(Document(doc))
+    }
+
     def apply[K](doc: Document)(implicit ev: BsonValue => K) = {
       val task = Document(doc("task").asDocument())
       new Schedule(
@@ -79,10 +91,12 @@ package object taskkeeper {
         status = ScheduleStatus(doc("status").asString.getValue),
         createdAt = doc.get("created_at").asTime.get,
         updatedAt = doc.get("updated_at").asTime orElse doc.get("created_at").asTime get,
-        assignment = doc.get("assignment").map(doc => Assignment.fromBson(doc.asDocument)))
+        assignment = doc.get("assignment").asDocument.map(Assignment.fromBson(_)))
     }
+
     implicit def toBson[K](s: Schedule[K])(implicit ev: K => BsonValue) = {
       BsonDocument(
+        "_id" -> s.id,
         "task" -> Task.toBson(s.task),
         "next_time" -> s.nextTime.toDate,
         "timeout_ms" -> s.timeout.inMilliseconds,
@@ -90,6 +104,10 @@ package object taskkeeper {
         "created_at" -> s.createdAt.toDate,
         "udpated_at" -> s.updatedAt.toDate,
         "assignment" -> s.assignment.map(_.toBson))
+    }
+
+    implicit def toDocument[K](s: Schedule[K])(implicit ev: K => BsonValue) = {
+      Document(toBson(s)).filter(!_._2.isNull)
     }
   }
 
@@ -120,24 +138,36 @@ package object taskkeeper {
         id = doc("_id").asObjectId().getValue,
         scheduleId = doc("schedule_id").asObjectId().getValue,
         createdAt = doc.get("created_at").asTime.get,
-        timeoutAt = doc.get("timeout_at").asTime.get)
+        timeoutAt = doc.get("timeout_at").asTime.get,
+        finishedAt = doc.get("finished_at").asTime,
+        result = doc.get("result"))
     }
 
     implicit def fromBson(doc: BsonDocument): Assignment = apply(Document(doc))
 
     implicit def toBson(a: Assignment) = a.toBson
+
+    implicit def toDocument(a: Assignment) = {
+      Document(toBson(a)).filter(!_._2.isNull)
+    }
   }
 
   case class Assignment(
       id: ObjectId,
       scheduleId: ObjectId,
       createdAt: Time,
-      timeoutAt: Time) {
+      timeoutAt: Time,
+      finishedAt: Option[Time] = None,
+      result: Option[BsonValue] = None) {
 
     def toBson = BsonDocument(
       "_id" -> id,
       "schedule_id" -> scheduleId,
       "created_at" -> createdAt.toDate,
-      "timeout_at" -> timeoutAt.toDate)
+      "timeout_at" -> timeoutAt.toDate,
+      "finished_at" -> finishedAt.map(_.toDate),
+      "result" -> result)
+
+    def toDocument = Document(toBson)
   }
 }

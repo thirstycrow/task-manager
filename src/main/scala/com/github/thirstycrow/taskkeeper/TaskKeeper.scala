@@ -36,13 +36,15 @@ trait TaskKeeperOperations {
 
   def schedule[K](
     task: Task[K],
-    when: Time)(
+    when: Time,
+    period: Option[Duration] = None)(
       implicit ev: K => BsonValue): Future[Schedule[K]] = {
     val now = Time.now
     val schedule = Schedule(
       id = ObjectId.get,
       task = task,
       nextTime = when,
+      period = period,
       status = Assignable,
       createdAt = now,
       updatedAt = now)
@@ -102,15 +104,25 @@ trait TaskKeeperOperations {
 
   def timeout(schedule: Schedule[_], assignment: Assignment): Future[Option[Assignment]] = {
     val now = Time.now
+    val baseUpdate = unset("assignment")
+    val update = schedule.period match {
+      case None =>
+        combine(
+          baseUpdate,
+          set("status", Timeout.value))
+      case Some(period) =>
+        combine(
+          baseUpdate,
+          set("status", Assignable.value),
+          set("next_time", (Time.now + period).toDate))
+    }
     schedules.findOneAndUpdate(
       filter = and(
         equal("_id", schedule.id),
         equal("assignment._id", assignment.id),
         equal("status", Assigned.value),
         lte("assignment.timeout_at", now.toDate)),
-      update = combine(
-        set("status", Timeout.value),
-        unset("assignment")),
+      update = update,
       options = FindOneAndUpdateOptions()
         .returnDocument(ReturnDocument.BEFORE))
       .map(_("assignment").asDocument(): Assignment)
@@ -131,13 +143,23 @@ trait TaskKeeperOperations {
 
   def success[T](schedule: Schedule[T], assignment: Assignment, result: BsonValue = BsonString("OK")): Future[Unit] = {
     val now = Time.now
+    val baseUpdate = unset("assignment")
+    val update = schedule.period match {
+      case None =>
+        combine(
+          baseUpdate,
+          set("status", Accomplished.value))
+      case Some(period) =>
+        combine(
+          baseUpdate,
+          set("status", Assignable.value),
+          set("next_time", (Time.now + period).toDate))
+    }
     schedules.findOneAndUpdate(
       filter = and(
         equal("_id", schedule.id),
         equal("assignment._id", assignment.id)),
-      update = combine(
-        set("status", Accomplished.value),
-        unset("assignment")),
+      update = update,
       options = FindOneAndUpdateOptions().returnDocument(ReturnDocument.BEFORE))
       .map(_("assignment").asDocument())
       .map(Assignment.fromBson(_))
@@ -156,13 +178,23 @@ trait TaskKeeperOperations {
 
   def failure[T](schedule: Schedule[T], assignment: Assignment, error: String): Future[Unit] = {
     val now = Time.now
+    val baseUpdate = unset("assignment")
+    val update = schedule.period match {
+      case None =>
+        combine(
+          baseUpdate,
+          set("status", Failed.value))
+      case Some(period) =>
+        combine(
+          baseUpdate,
+          set("status", Assignable.value),
+          set("next_time", (Time.now + period).toDate))
+    }
     schedules.findOneAndUpdate(
       filter = and(
         equal("_id", schedule.id),
         equal("assignment._id", assignment.id)),
-      update = combine(
-        set("status", Failed.value),
-        unset("assignment")),
+      update = update,
       options = FindOneAndUpdateOptions().returnDocument(ReturnDocument.BEFORE))
       .map(_("assignment").asDocument())
       .map(Assignment.fromBson(_))

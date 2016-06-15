@@ -23,6 +23,7 @@ import com.twitter.util.Await
 import com.twitter.util.Future
 import com.twitter.util.MockTimer
 import com.twitter.util.Time
+import com.twitter.util.Duration
 
 class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb {
 
@@ -57,6 +58,11 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
 
     scenario("schedule a one-time task") {
       val schd = schedule("feature.schedule", thisEvening)
+      assert(findSchedule(schd.id) == Some(schd))
+    }
+
+    scenario("schedule a periodic task") {
+      val schd = schedule("feature.schedule", thisEvening, Some(1.hour))
       assert(findSchedule(schd.id) == Some(schd))
     }
   }
@@ -135,7 +141,28 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
         val assignment = assign(schd).get
         timeControl.advance(schd.timeout)
         tk.timer.asInstanceOf[MockTimer].tick()
-        assert(findSchedule(schd.id).get.status == Timeout)
+        Thread.sleep(50)
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Timeout)
+          assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).get.timeoutAt == Some(Time.now))
+      }
+    }
+
+    scenario("timeout a periodic assignment") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening, Some(1.hour))
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        timeControl.advance(schd.timeout)
+        tk.timer.asInstanceOf[MockTimer].tick()
+        Thread.sleep(50)
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Assignable)
+          assert(schd.assignment == None)
+          assert(schd.nextTime == Time.now + schd.period.get)
+        }.nonEmpty)
         assert(findAssignment(assignment.id).get.timeoutAt == Some(Time.now))
       }
     }
@@ -152,6 +179,25 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
         assert(findSchedule(schd.id).map { schd =>
           assert(schd.status == Accomplished)
           assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.result == Some(BsonString("OK")))
+          assert(asgn.timeoutAt == None)
+        }.nonEmpty)
+      }
+    }
+
+    scenario("report success for periodic task") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening, Some(1.hour))
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        Await.result(tk.success(schd, assignment))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Assignable)
+          assert(schd.assignment == None)
+          assert(schd.nextTime == Time.now + schd.period.get)
         }.nonEmpty)
         assert(findAssignment(assignment.id).map { asgn =>
           assert(asgn.finishedAt == Some(Time.now))
@@ -182,8 +228,30 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
         }.nonEmpty)
       }
     }
-  }
 
+    scenario("report success for periodic task when the assignment is already timed out") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening, Some(1.hour))
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        timeControl.advance(schd.timeout)
+        tk.timer.asInstanceOf[MockTimer].tick()
+        val timeoutAt = Time.now
+        timeControl.advance(1.second)
+        Await.result(tk.success(schd, assignment))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Assignable)
+          assert(schd.assignment == None)
+          assert(schd.nextTime == timeoutAt + schd.period.get)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.timeoutAt == Some(timeoutAt))
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.result == Some(BsonString("OK")))
+        }.nonEmpty)
+      }
+    }
+  }
 
   feature("report failure") {
 
@@ -196,6 +264,25 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
         assert(findSchedule(schd.id).map { schd =>
           assert(schd.status == Failed)
           assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.error == Some("error_message"))
+          assert(asgn.timeoutAt == None)
+        }.nonEmpty)
+      }
+    }
+
+    scenario("report failure for periodic task") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening, Some(1.hour))
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        Await.result(tk.failure(schd, assignment, "error_message"))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Assignable)
+          assert(schd.assignment == None)
+          assert(schd.nextTime == Time.now + schd.period.get)
         }.nonEmpty)
         assert(findAssignment(assignment.id).map { asgn =>
           assert(asgn.finishedAt == Some(Time.now))
@@ -226,15 +313,38 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
         }.nonEmpty)
       }
     }
+
+    scenario("report failure for periodic task when the assignment is already timed out") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening, Some(1.hour))
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        timeControl.advance(schd.timeout)
+        tk.timer.asInstanceOf[MockTimer].tick()
+        val timeoutAt = Time.now
+        timeControl.advance(1.second)
+        Await.result(tk.failure(schd, assignment, "error_message"))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Assignable)
+          assert(schd.assignment == None)
+          assert(schd.nextTime == timeoutAt + schd.period.get)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.timeoutAt == Some(timeoutAt))
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.error == Some("error_message"))
+        }.nonEmpty)
+      }
+    }
   }
 
   val sequence = new AtomicInteger(0)
 
   def newCategory = "category_" + sequence.incrementAndGet()
 
-  def schedule(category: String, when: Time) = {
+  def schedule(category: String, when: Time, period: Option[Duration] = None) = {
     val task = Task(category, Texting("10011110000", "Do some shopping tonight"))
-    Await.result(tk.schedule(task, when))
+    Await.result(tk.schedule(task, when, period))
   }
 
   def findSchedule(id: ObjectId) = {

@@ -85,7 +85,7 @@ trait TaskKeeperOperations {
         lte("next_time", now.toDate)),
       update = combine(
         set("status", Assigned.value),
-        set("assignment", schedule.assign(_timeout).toBson)),
+        set("assignment", schedule.assign(_timeout).toDocument)),
       options = FindOneAndUpdateOptions()
         .returnDocument(ReturnDocument.AFTER))
       .map(_("assignment").asDocument(): Assignment)
@@ -109,7 +109,8 @@ trait TaskKeeperOperations {
         equal("status", Assigned.value),
         lte("assignment.timeout_at", now.toDate)),
       update = combine(
-        set("status", Timeout.value)),
+        set("status", Timeout.value),
+        unset("assignment")),
       options = FindOneAndUpdateOptions()
         .returnDocument(ReturnDocument.BEFORE))
       .map(_("assignment").asDocument(): Assignment)
@@ -123,7 +124,7 @@ trait TaskKeeperOperations {
   }
 
   def save(assignment: Assignment): Future[Unit] = {
-    assignments.insertOne(assignment)
+    assignments.insertOne(assignment.toDocument)
       .toTwitterFuture()
       .unit
   }
@@ -144,16 +145,68 @@ trait TaskKeeperOperations {
       .map(_.headOption)
       .flatMap {
         case Some(assignment) =>
-          assignments.insertOne(
-            assignment.copy(
-              finishedAt = Some(now),
-              result = Some(result))
-              .toDocument)
-            .toTwitterFuture()
-            .unit
+          save(assignment.copy(
+            finishedAt = Some(now),
+            result = Some(result),
+            timeoutAt = None))
         case None =>
-          throw BadAssignmentException(assignment)
+          updateSuccess(assignment, result)
       }
+  }
+
+  def failure[T](schedule: Schedule[T], assignment: Assignment, error: String): Future[Unit] = {
+    val now = Time.now
+    schedules.findOneAndUpdate(
+      filter = and(
+        equal("_id", schedule.id),
+        equal("assignment._id", assignment.id)),
+      update = combine(
+        set("status", Failed.value),
+        unset("assignment")),
+      options = FindOneAndUpdateOptions().returnDocument(ReturnDocument.BEFORE))
+      .map(_("assignment").asDocument())
+      .map(Assignment.fromBson(_))
+      .toTwitterFuture()
+      .map(_.headOption)
+      .flatMap {
+        case Some(assignment) =>
+          save(assignment.copy(
+            finishedAt = Some(now),
+            error = Some(error),
+            timeoutAt = None))
+        case None =>
+          updateFailure(assignment, error)
+      }
+  }
+
+  def updateSuccess(asgn: Assignment, result: BsonValue): Future[Unit] = {
+    val now = Time.now
+    assignments.updateOne(
+      filter = and(
+        equal("_id", asgn.id),
+        not(exists("finished_at"))),
+      update = combine(
+        set("finished_at", now.toDate),
+        set("result", result)))
+      .toTwitterFuture()
+      .map(_.headOption.getOrElse(
+        throw BadAssignmentException(asgn)))
+      .unit
+  }
+
+  def updateFailure(asgn: Assignment, error: String): Future[Unit] = {
+    val now = Time.now
+    assignments.updateOne(
+      filter = and(
+        equal("_id", asgn.id),
+        not(exists("finished_at"))),
+      update = combine(
+        set("finished_at", now.toDate),
+        set("error", error)))
+      .toTwitterFuture()
+      .map(_.headOption.getOrElse(
+        throw BadAssignmentException(asgn)))
+      .unit
   }
 }
 
@@ -161,4 +214,5 @@ class TaskKeeper(val db: MongoDatabase, val timer: Timer)
   extends TaskKeeperCollections
   with TaskKeeperOperations
 
-case class BadAssignmentException(assignment: Assignment) extends RuntimeException with NoStacktrace
+case class BadAssignmentException(assignment: Assignment)
+  extends RuntimeException with NoStacktrace

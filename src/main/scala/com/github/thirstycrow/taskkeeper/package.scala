@@ -103,7 +103,7 @@ package object taskkeeper {
         "status" -> Assignable.value,
         "created_at" -> s.createdAt.toDate,
         "udpated_at" -> s.updatedAt.toDate,
-        "assignment" -> s.assignment.map(_.toBson))
+        "assignment" -> s.assignment.map(_.toDocument))
     }
 
     implicit def toDocument[K](s: Schedule[K])(implicit ev: K => BsonValue) = {
@@ -127,7 +127,7 @@ package object taskkeeper {
         id = ObjectId.get,
         scheduleId = id,
         createdAt = now,
-        timeoutAt = now + timeout)
+        timeoutAt = Some(now + timeout))
     }
   }
 
@@ -138,36 +138,35 @@ package object taskkeeper {
         id = doc("_id").asObjectId().getValue,
         scheduleId = doc("schedule_id").asObjectId().getValue,
         createdAt = doc.get("created_at").asTime.get,
-        timeoutAt = doc.get("timeout_at").asTime.get,
+        timeoutAt = doc.get("timeout_at").asTime,
         finishedAt = doc.get("finished_at").asTime,
-        result = doc.get("result"))
+        result = doc.get("result"),
+        error = doc.get("error").map(_.asString.getValue))
     }
 
     implicit def fromBson(doc: BsonDocument): Assignment = apply(Document(doc))
-
-    implicit def toBson(a: Assignment) = a.toBson
-
-    implicit def toDocument(a: Assignment) = {
-      Document(toBson(a)).filter(!_._2.isNull)
-    }
   }
 
   case class Assignment(
       id: ObjectId,
       scheduleId: ObjectId,
       createdAt: Time,
-      timeoutAt: Time,
+      timeoutAt: Option[Time],
       finishedAt: Option[Time] = None,
-      result: Option[BsonValue] = None) {
+      result: Option[BsonValue] = None,
+      error: Option[String] = None) {
 
-    def toBson = BsonDocument(
-      "_id" -> id,
-      "schedule_id" -> scheduleId,
-      "created_at" -> createdAt.toDate,
-      "timeout_at" -> timeoutAt.toDate,
-      "finished_at" -> finishedAt.map(_.toDate),
-      "result" -> result)
-
-    def toDocument = Document(toBson)
+    def toDocument = {
+      Document(
+        BsonDocument(
+          "_id" -> id,
+          "schedule_id" -> scheduleId,
+          "created_at" -> createdAt.toDate,
+          "timeout_at" -> timeoutAt.map(_.toDate),
+          "finished_at" -> finishedAt.map(_.toDate),
+          "result" -> result,
+          "error" -> error))
+        .filter(!_._2.isNull)
+    }
   }
 }

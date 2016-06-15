@@ -136,7 +136,94 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
         timeControl.advance(schd.timeout)
         tk.timer.asInstanceOf[MockTimer].tick()
         assert(findSchedule(schd.id).get.status == Timeout)
-        assert(findAssignment(assignment.id).get.timeoutAt == Time.now)
+        assert(findAssignment(assignment.id).get.timeoutAt == Some(Time.now))
+      }
+    }
+  }
+
+  feature("report success") {
+
+    scenario("report success") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening)
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        Await.result(tk.success(schd, assignment))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Accomplished)
+          assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.result == Some(BsonString("OK")))
+          assert(asgn.timeoutAt == None)
+        }.nonEmpty)
+      }
+    }
+
+    scenario("report success when the assignment is already timed out") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening)
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        timeControl.advance(schd.timeout)
+        tk.timer.asInstanceOf[MockTimer].tick()
+        val timeoutAt = Time.now
+        timeControl.advance(1.second)
+        Await.result(tk.success(schd, assignment))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Timeout)
+          assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.timeoutAt == Some(timeoutAt))
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.result == Some(BsonString("OK")))
+        }.nonEmpty)
+      }
+    }
+  }
+
+
+  feature("report failure") {
+
+    scenario("report failure") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening)
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        Await.result(tk.failure(schd, assignment, "error_message"))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Failed)
+          assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.error == Some("error_message"))
+          assert(asgn.timeoutAt == None)
+        }.nonEmpty)
+      }
+    }
+
+    scenario("report failure when the assignment is already timed out") {
+      val category = newCategory
+      val schd = schedule(category, thisEvening)
+      Time.withTimeAt(thisEvening) { timeControl =>
+        val assignment = assign(schd).get
+        timeControl.advance(schd.timeout)
+        tk.timer.asInstanceOf[MockTimer].tick()
+        val timeoutAt = Time.now
+        timeControl.advance(1.second)
+        Await.result(tk.failure(schd, assignment, "error_message"))
+        assert(findSchedule(schd.id).map { schd =>
+          assert(schd.status == Timeout)
+          assert(schd.assignment == None)
+        }.nonEmpty)
+        assert(findAssignment(assignment.id).map { asgn =>
+          assert(asgn.timeoutAt == Some(timeoutAt))
+          assert(asgn.finishedAt == Some(Time.now))
+          assert(asgn.error == Some("error_message"))
+        }.nonEmpty)
       }
     }
   }

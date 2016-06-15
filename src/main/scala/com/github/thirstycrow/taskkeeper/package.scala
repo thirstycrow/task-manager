@@ -37,14 +37,16 @@ package object taskkeeper {
   }
 
   object Task {
-    implicit def toBson[K](task: Task[K])(implicit ev: K => BsonValue): BsonValue = {
+    implicit def toBson[K, P](task: Task[K, P])(
+      implicit ev: K => BsonValue, evp: P => BsonValue): BsonValue = {
       BsonDocument(
         "category" -> task.category,
-        "key" -> ev(task.key))
+        "key" -> ev(task.key),
+        "params" -> task.params.map(evp))
     }
   }
 
-  case class Task[K](category: String, key: K)
+  case class Task[K, P](category: String, key: K, params: Option[P] = None)
 
   object ScheduleStatus {
 
@@ -75,17 +77,18 @@ package object taskkeeper {
 
   object Schedule {
 
-    def apply[K](doc: BsonDocument)(implicit ev: BsonValue => K): Schedule[K] = {
-      apply(Document(doc))
+    def apply[K, P](doc: BsonDocument)(implicit ev: BsonValue => K, evp: BsonValue => P): Schedule[K, P] = {
+      apply(Document(doc))(ev, evp)
     }
 
-    def apply[K](doc: Document)(implicit ev: BsonValue => K) = {
+    def apply[K, P](doc: Document)(implicit ev: BsonValue => K, evp: BsonValue => P) = {
       val task = Document(doc("task").asDocument())
       new Schedule(
         id = doc("_id").asObjectId().getValue,
-        task = Task[K](
+        task = Task[K, P](
           category = task("category").asString.getValue,
-          key = ev(task("key").asDocument)),
+          key = ev(task("key").asDocument),
+          params = task.get("params").map(doc => evp(doc.asDocument))),
         nextTime = doc.get("next_time").asTime.get,
         period = doc.get("period_ms").asDuration,
         timeout = doc.get("timeout_ms").asDuration.getOrElse(DefaultTimeout),
@@ -95,10 +98,10 @@ package object taskkeeper {
         assignment = doc.get("assignment").asDocument.map(Assignment.fromBson(_)))
     }
 
-    implicit def toBson[K](s: Schedule[K])(implicit ev: K => BsonValue) = {
+    implicit def toBson[K, P](s: Schedule[K, P])(implicit ev: K => BsonValue, evp: P => BsonValue) = {
       BsonDocument(
         "_id" -> s.id,
-        "task" -> Task.toBson(s.task),
+        "task" -> Task.toBson(s.task)(ev, evp),
         "next_time" -> s.nextTime.toDate,
         "timeout_ms" -> s.timeout.inMilliseconds,
         "period_ms" -> s.period.map(_.inMilliseconds),
@@ -108,14 +111,14 @@ package object taskkeeper {
         "assignment" -> s.assignment.map(_.toDocument))
     }
 
-    implicit def toDocument[K](s: Schedule[K])(implicit ev: K => BsonValue) = {
-      Document(toBson(s)).filter(!_._2.isNull)
+    implicit def toDocument[K, P](s: Schedule[K, P])(implicit ev: K => BsonValue, evp: P => BsonValue) = {
+      Document(toBson(s)(ev, evp)).filter(!_._2.isNull)
     }
   }
 
-  case class Schedule[K](
+  case class Schedule[K, P](
       id: ObjectId,
-      task: Task[K],
+      task: Task[K, P],
       nextTime: Time,
       period: Option[Duration],
       timeout: Duration = DefaultTimeout,

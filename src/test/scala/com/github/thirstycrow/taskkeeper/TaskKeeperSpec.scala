@@ -35,7 +35,6 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
   }
 
   object Texting {
-
     implicit def toBson(task: Texting) =
       BsonDocument("mobile" -> task.mobile, "text" -> task.text)
 
@@ -47,6 +46,19 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
     }
   }
   case class Texting(mobile: String, text: String)
+
+  object Credential {
+    implicit def toBson(c: Credential) =
+      BsonDocument("username" -> c.username, "password" -> c.password)
+
+    implicit def fromBson(bson: BsonValue) = {
+      val doc = Document(bson.asDocument)
+      Credential(
+        doc("username").asString.getValue,
+        doc("password").asString.getValue)
+    }
+  }
+  case class Credential(username: String, password: String)
 
   def zeroOclock = Time.now.floor(1.day)
 
@@ -343,12 +355,15 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
   def newCategory = "category_" + sequence.incrementAndGet()
 
   def schedule(category: String, when: Time, period: Option[Duration] = None) = {
-    val task = Task(category, Texting("10011110000", "Do some shopping tonight"))
+    val task = Task[Texting, Credential](
+        category = category,
+        key = Texting("10011110000", "Do some shopping tonight"),
+        params = Some(Credential("user", "passwd")))
     Await.result(tk.schedule(task, when, period))
   }
 
   def findSchedule(id: ObjectId) = {
-    Await.result(tk.findSchedule[Texting](id))
+    Await.result(tk.findSchedule[Texting, Credential](id))
   }
 
   def findAssignment(id: ObjectId) = {
@@ -356,10 +371,10 @@ class TaskKeeperSpec extends FeatureSpec with GivenWhenThen with EmbeddedMongodb
   }
 
   def fetch(category: String) = {
-    Await.result(tk.fetch[Texting](category, 1).map(_.headOption))
+    Await.result(tk.fetch[Texting, Credential](category, 1).map(_.headOption))
   }
 
-  def assign(schd: Schedule[_]) = {
+  def assign(schd: Schedule[_, _]) = {
     Await.result(tk.assign(schd))
   }
 

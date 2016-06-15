@@ -7,6 +7,8 @@ import org.mongodb.scala.bson.BsonValue
 import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.model.Filters._
 import org.mongodb.scala.model.FindOneAndUpdateOptions
+import org.mongodb.scala.model.IndexModel
+import org.mongodb.scala.model.Indexes._
 import org.mongodb.scala.model.ReturnDocument
 import org.mongodb.scala.model.Updates._
 
@@ -15,17 +17,15 @@ import com.twitter.util.Time
 import com.twitter.util.Timer
 import com.twitter.util.Duration
 import com.twitter.util.NoStacktrace
-import com.twitter.util.Promise.K
 import org.bson.types.ObjectId
-import com.twitter.util.Promise.K
 
 trait TaskKeeperCollections {
 
   val db: MongoDatabase
 
-  def schedules = db.getCollection("schedules")
+  val schedules = db.getCollection("schedules")
 
-  def assignments = db.getCollection("assignments")
+  val assignments = db.getCollection("assignments")
 }
 
 trait TaskKeeperOperations {
@@ -34,11 +34,11 @@ trait TaskKeeperOperations {
 
   val timer: Timer
 
-  def schedule[K](
-    task: Task[K],
+  def schedule[K, P](
+    task: Task[K, P],
     when: Time,
     period: Option[Duration] = None)(
-      implicit ev: K => BsonValue): Future[Schedule[K]] = {
+      implicit ev: K => BsonValue, evp: P => BsonValue): Future[Schedule[K, P]] = {
     val now = Time.now
     val schedule = Schedule(
       id = ObjectId.get,
@@ -53,7 +53,7 @@ trait TaskKeeperOperations {
       .map(_ => schedule)
   }
 
-  def findSchedule[K](id: ObjectId)(implicit ev: BsonValue => K): Future[Option[Schedule[K]]] = {
+  def findSchedule[K, P](id: ObjectId)(implicit ev: BsonValue => K, evp: BsonValue => P): Future[Option[Schedule[K, P]]] = {
     schedules.find(equal("_id", id))
       .toTwitterFuture()
       .map(_.headOption.map(Schedule(_)))
@@ -65,7 +65,7 @@ trait TaskKeeperOperations {
       .map(_.headOption.map(Assignment(_)))
   }
 
-  def fetch[K](category: String, count: Int)(implicit ev: BsonValue => K): Future[Seq[Schedule[K]]] = {
+  def fetch[K, P](category: String, count: Int)(implicit ev: BsonValue => K, evp: BsonValue => P): Future[Seq[Schedule[K, P]]] = {
     val now = Time.now
     schedules.find(
       filter = and(
@@ -74,10 +74,10 @@ trait TaskKeeperOperations {
         lte("next_time", now.toDate)))
       .limit(count)
       .toTwitterFuture()
-      .map(_.map(doc => Schedule(doc)(ev)))
+      .map(_.map(doc => Schedule(doc)(ev, evp)))
   }
 
-  def assign(schedule: Schedule[_], timeout: Option[Duration] = None): Future[Option[Assignment]] = {
+  def assign(schedule: Schedule[_, _], timeout: Option[Duration] = None): Future[Option[Assignment]] = {
     val now = Time.now
     val _timeout = timeout.getOrElse(schedule.timeout)
     schedules.findOneAndUpdate(
@@ -102,7 +102,7 @@ trait TaskKeeperOperations {
       }
   }
 
-  def timeout(schedule: Schedule[_], assignment: Assignment): Future[Option[Assignment]] = {
+  def timeout(schedule: Schedule[_, _], assignment: Assignment): Future[Option[Assignment]] = {
     val now = Time.now
     val baseUpdate = unset("assignment")
     val update = schedule.period match {
@@ -141,7 +141,7 @@ trait TaskKeeperOperations {
       .unit
   }
 
-  def success[T](schedule: Schedule[T], assignment: Assignment, result: BsonValue = BsonString("OK")): Future[Unit] = {
+  def success[K, P](schedule: Schedule[K, P], assignment: Assignment, result: BsonValue = BsonString("OK")): Future[Unit] = {
     val now = Time.now
     val baseUpdate = unset("assignment")
     val update = schedule.period match {
@@ -176,7 +176,7 @@ trait TaskKeeperOperations {
       }
   }
 
-  def failure[T](schedule: Schedule[T], assignment: Assignment, error: String): Future[Unit] = {
+  def failure[K, P](schedule: Schedule[K, P], assignment: Assignment, error: String): Future[Unit] = {
     val now = Time.now
     val baseUpdate = unset("assignment")
     val update = schedule.period match {
